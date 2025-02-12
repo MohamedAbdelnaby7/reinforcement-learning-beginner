@@ -219,6 +219,37 @@ def value_iteration(world, transition_model=None):
                 best_a = np.argmax(action_values)
                 policy[i, j] = best_a
     return np.array(policy, dtype=int), np.array(values)
+def generalized_policy_iteration(world, transition_model=None):
+    """Perform Generalized Policy Iteration (GPI) where evaluation and improvement happen iteratively."""
+    values = initialize_values(world)    
+    height, width = world.shape
+    policy = initialize_policy(world)
+
+    while True:
+        delta = 0
+        new_values = values.copy()
+        for i in range(height):
+            for j in range(width):
+                if world[i, j] != 0:
+                    continue
+                new_values[i, j] = one_step_lookahead(i, j, policy[i, j], values, world, transition_model)
+        values = new_values
+        
+        stable = True
+        for i in range(height):
+            for j in range(width):
+                if world[i, j] != 0:
+                    continue
+                old_action = policy[i, j]
+                action_values = [one_step_lookahead(i, j, a_idx, values, world, transition_model) for a_idx in range(len(ACTIONS))]
+                best_a = np.argmax(action_values)
+                policy[i, j] = best_a
+                if best_a != old_action:
+                    stable = False
+        
+        if stable and delta < THETA:
+            break
+    return policy, values
 
 def plot_policy_arrows(ax, policy, world, step=1):
     """
@@ -309,7 +340,21 @@ def main():
     policy, values = value_iteration(world, transition_model)
     end_time = time.time()
     elapsed = end_time - start_time
-    print(f"Value iteration took {elapsed:.4f} seconds.")
+    print(f"Value iteration with uncertainty took {elapsed:.4f} seconds.")
+    plot_results(policy, values, world)
+
+    start_time = time.time()
+    policy, values = generalized_policy_iteration(world)
+    end_time = time.time()
+    elapsed = end_time - start_time
+    print(f"GPI took {elapsed:.4f} seconds.")
+    plot_results(policy, values, world)
+
+    start_time = time.time()
+    policy, values = generalized_policy_iteration(world, transition_model)
+    end_time = time.time()
+    elapsed = end_time - start_time
+    print(f"GPI with uncertainty took {elapsed:.4f} seconds.")
     plot_results(policy, values, world)
 
 if __name__ == "__main__":
