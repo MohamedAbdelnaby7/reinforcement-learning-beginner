@@ -1,17 +1,21 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-
-# World size and parameters
-WORLD_HEIGHT = 15
-WORLD_WIDTH = 51
-GAMMA = 0.95       # Discount factor
-THETA = 1e-4       # Convergence threshold
+# policy hyperparameters
+GAMMA = 0.8      # Discount factor
+THETA = 1e-2       # Convergence threshold
 
 # Actions (N, S, E, W, NE, NW, SE, SW)
-ACTIONS = [(-1, 0), (1, 0), (0, 1), (0, -1),
-           (-1, 1), (-1, -1), (1, 1), (1, -1)]
-ACTION_NAMES = ['↑', '↓', '→', '←', '↗', '↖', '↘', '↙']
+ACTIONS = [
+    (0, 1),   # 0 → Right (East)  
+    (-1, 1),  # 1 ↗ Up-Right (North-East)  
+    (-1, 0),  # 2 ↑ Up (North)  
+    (-1, -1), # 3 ↖ Up-Left (North-West)  
+    (0, -1),  # 4 ← Left (West)  
+    (1, -1),  # 5 ↙ Down-Left (South-West)  
+    (1, 0),   # 6 ↓ Down (South)  
+    (1, 1)    # 7 ↘ Down-Right (South-East)  
+]
 
 # Rewards
 REWARD_GOAL = 100.0
@@ -57,33 +61,70 @@ def initialize_policy(world):
             if world[i, j] == 0:  # free space
                 policy[i, j] = np.random.randint(len(ACTIONS))
     return policy
+0
+def compute_action_probabilities(action_idx, transition_model):
+    """Compute action probabilities for a given action index based on the transition model."""
+    return transition_model[action_idx,:]
 
-def one_step_lookahead(i, j, action_idx, values, world):
+def create_transition_model(ACTIONS):
+    """Generate a transition model where actions deviate by ±45° with 10% probability."""
+    num_actions = len(ACTIONS)
+    transition_model = np.zeros((num_actions, num_actions))
+
+    for a in range(num_actions):
+        transition_model[a, a] = 0.8  # Intended action
+        transition_model[a, (a - 1) % num_actions] = 0.1  # -45° (counterclockwise)
+        transition_model[a, (a + 1) % num_actions] = 0.1  # +45° (clockwise)
+
+    return transition_model
+    
+def one_step_lookahead(i, j, action_idx, values, world, transition_model=None):
     """
     Returns the expected (immediate reward + gamma * next_value) for
-    executing 'action_idx' from state (i, j), under perfect action execution.
+    executing 'action_idx' from state (i, j), under perfect action execution if all probabilities other than action is zero.
+    otherwise compute expected value of taking action_idx from (i, j) using given probabilities.
     If the next state is out of bounds or an obstacle, returns penalty accordingly.
     If it's the goal, returns REWARD_GOAL with no further value.
     Otherwise, returns REWARD_MOVE + gamma * next state's value.
     """
     height, width = world.shape
-    di, dj = ACTIONS[action_idx]
-    next_i, next_j = i + di, j + dj
-
-    # Out of bounds => treat as obstacle
-    if not (0 <= next_i < height and 0 <= next_j < width):
-        return REWARD_OBSTACLE
-
-    cell_type = world[next_i, next_j]
-    if cell_type == 1:
-        return REWARD_OBSTACLE
-    elif cell_type == 2:  # goal
-        return REWARD_GOAL
+    if transition_model is None:
+        # Directly compute if the action execution is deterministic
+        di, dj = ACTIONS[action_idx]
+        next_i, next_j = i + di, j + dj
+        if not (0 <= next_i < height and 0 <= next_j < width):
+            return REWARD_OBSTACLE
+        cell_type = world[next_i, next_j]
+        if cell_type == 1:
+            return REWARD_OBSTACLE
+        elif cell_type == 2:
+            return REWARD_GOAL
+        else:
+            return REWARD_MOVE + GAMMA * values[next_i, next_j]
     else:
-        # Free cell
-        return REWARD_MOVE + GAMMA * values[next_i, next_j]
+        action_probabilities = compute_action_probabilities(action_idx, transition_model)
+        expected_value = 0.0
+        for a_idx, prob in enumerate(action_probabilities):
+            di, dj = ACTIONS[a_idx]
+            next_i, next_j = i + di, j + dj
+            if not (0 <= next_i < height and 0 <= next_j < width):
+                reward = REWARD_OBSTACLE
+                next_val = 0.0
+            else:
+                cell_type = world[next_i, next_j]
+                if cell_type == 1:
+                    reward = REWARD_OBSTACLE
+                    next_val = 0.0
+                elif cell_type == 2:
+                    reward = REWARD_GOAL
+                    next_val = 0.0
+                else:
+                    reward = REWARD_MOVE
+                    next_val = values[next_i, next_j]
+            expected_value += prob * (reward + GAMMA * next_val)
+        return expected_value
 
-def policy_evaluation(policy, values, world):
+def policy_evaluation(policy, values, world, transition_model=None):
     """Evaluate the current deterministic policy until convergence."""
     height, width = world.shape
     while True:
@@ -96,14 +137,14 @@ def policy_evaluation(policy, values, world):
                     continue
                 v_old = values[i, j]
                 a = policy[i, j]
-                new_values[i, j] = one_step_lookahead(i, j, a, values, world)
+                new_values[i, j] = one_step_lookahead(i, j, a, values, world, transition_model)
                 delta = max(delta, abs(v_old - new_values[i, j]))
         values = new_values
         if delta < THETA:
             break
     return values
 
-def policy_improvement(policy, values, world):
+def policy_improvement(policy, values, world, transition_model=None):
     """Improve the policy greedily given the current value function."""
     height, width = world.shape
     stable = True
@@ -114,28 +155,29 @@ def policy_improvement(policy, values, world):
             old_action = policy[i, j]
             # Evaluate all possible actions
             action_values = [
-                one_step_lookahead(i, j, a_idx, values, world)
+                one_step_lookahead(i, j, a_idx, values, world, transition_model)
                 for a_idx in range(len(ACTIONS))
             ]
             best_action = np.argmax(action_values)
             policy[i, j] = best_action
             if best_action != old_action:
+                #print(f"Policy change at ({i}, {j}): {old_action} → {best_action}, ΔV={action_values[best_action] - action_values[old_action]}")
                 stable = False
     return policy, stable
 
-def policy_iteration(world):
+def policy_iteration(world, transition_model=None):
     """Run iterative policy evaluation + improvement until stable."""
     values = initialize_values(world)
     policy = initialize_policy(world)
 
     while True:
         values = policy_evaluation(policy, values, world)
-        policy, stable = policy_improvement(policy, values, world)
+        policy, stable = policy_improvement(policy, values, world, transition_model)
         if stable:
             break
     return policy, values
 
-def value_iteration(world):
+def value_iteration(world, transition_model=None):
     """
     Perform value iteration until convergence.
     Returns (values, policy).
@@ -155,7 +197,7 @@ def value_iteration(world):
                 old_val = values[i, j]
                 # For each action, compute expected value
                 action_values = [
-                    one_step_lookahead(i, j, a_idx, values, world)
+                    one_step_lookahead(i, j, a_idx, values, world, transition_model)
                     for a_idx in range(len(ACTIONS))
                 ]
                 best_val = max(action_values)
@@ -178,7 +220,7 @@ def value_iteration(world):
                 policy[i, j] = best_a
     return np.array(policy, dtype=int), np.array(values)
 
-def plot_policy_arrows(ax, policy, world, step=2):
+def plot_policy_arrows(ax, policy, world, step=1):
     """
     Draw disconnected arrows for free cells.
       - step=2 means we skip every other cell to reduce visual clutter.
@@ -247,8 +289,24 @@ def main():
     print(f"Policy iteration took {elapsed:.4f} seconds.")
     plot_results(policy, values, world)
 
+    world = create_world()
+    start_time = time.time()
+    transition_model = create_transition_model(ACTIONS)
+    policy, values = policy_iteration(world, transition_model)
+    end_time = time.time()
+    elapsed = end_time - start_time
+    print(f"Policy iteration with uncertainty took {elapsed:.4f} seconds.")
+    plot_results(policy, values, world)
+
     start_time = time.time()
     policy, values = value_iteration(world)
+    end_time = time.time()
+    elapsed = end_time - start_time
+    print(f"Value iteration took {elapsed:.4f} seconds.")
+    plot_results(policy, values, world)
+
+    start_time = time.time()
+    policy, values = value_iteration(world, transition_model)
     end_time = time.time()
     elapsed = end_time - start_time
     print(f"Value iteration took {elapsed:.4f} seconds.")
