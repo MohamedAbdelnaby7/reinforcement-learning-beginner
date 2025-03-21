@@ -1,0 +1,162 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+
+# -------------------------
+# Environment Constants
+# -------------------------
+ROWS = 6
+COLS = 9
+START = (2, 0)
+GOAL = (0, 8)
+
+BLOCKED_CELLS = [
+    (3, 7), (3, 7), (3, 7),  # Example from Sutton & Barto fig
+    (4, 2), (3, 2), (2, 2),
+    (1, 5)
+]
+
+# Move directions: up, down, left, right
+ACTIONS = {
+    0: (-1, 0),  # Up
+    1: (1, 0),   # Down
+    2: (0, -1),  # Left
+    3: (0, 1)    # Right
+}
+
+# Hyperparameters
+ALPHA = 0.1   # Learning rate
+GAMMA = 0.95  # Discount factor
+EPSILON = 0.1 # Epsilon-greedy
+EPISODES = 50 # Number of episodes
+RUNS = 100     # Number of independent runs for averaging
+
+def is_valid(r, c):
+    """
+    Check if row=r, col=c is within the grid and not blocked.
+    """
+    if r < 0 or r >= ROWS or c < 0 or c >= COLS:
+        return False
+    if (r, c) in BLOCKED_CELLS:
+        return False
+    return True
+
+def step(state, action):
+    """
+    Take a real step in the environment from 'state' using 'action'.
+    Return (next_state, reward, done).
+    """
+    r, c = state
+    dr, dc = ACTIONS[action]
+    nr, nc = r + dr, c + dc
+
+    # If invalid move, agent stays in same cell
+    if not is_valid(nr, nc):
+        nr, nc = r, c
+
+    # Check if reached goal
+    if (nr, nc) == GOAL:
+        return (nr, nc), 1, True  # reward=1 upon reaching goal
+    else:
+        return (nr, nc), 0, False
+
+def epsilon_greedy(Q, state, epsilon):
+    """
+    Epsilon-greedy action selection.
+    Q is a dict: Q[state][action].
+    """
+    if np.random.rand() < epsilon:
+        return np.random.choice(list(ACTIONS.keys()))
+    else:
+        # Greedy wrt Q
+        best_value = np.max(Q[state])
+        best_actions = [a for a, val in enumerate(Q[state]) if val == best_value]
+        return np.random.choice(best_actions)
+
+def dyna_q(n_planning=5):
+    """
+    A single run of Dyna-Q with n_planning steps each time.
+    Returns a list 'steps_per_episode' of how many steps
+    each episode took, for EPISODES episodes.
+    """
+
+    # Initialize Q: Q[state] = array of 4 actions
+    Q = dict()
+    for r in range(ROWS):
+        for c in range(COLS):
+            if (r, c) in BLOCKED_CELLS: 
+                continue
+            Q[(r, c)] = np.zeros(len(ACTIONS))
+
+    # The model: model[(s, a)] = (s', reward)
+    model = dict()
+
+    steps_per_episode = []
+
+    for _ in range(EPISODES):
+        state = START
+        done = False
+        steps_count = 0
+
+        while not done:
+            steps_count += 1
+            # Choose action
+            action = epsilon_greedy(Q, state, EPSILON)
+
+            # Take step in real environment
+            next_state, reward, done = step(state, action)
+            # Update Q (Q-learning update)
+            Q[state][action] += ALPHA * (reward + GAMMA * np.max(Q[next_state]) - Q[state][action])
+
+            # Update model
+            model[(state, action)] = (next_state, reward)
+
+            # Move to next state
+            state = next_state
+
+            # Planning phase
+            for _ in range(n_planning):
+                # Randomly sample previously visited state-action
+                (s_rand, a_rand) = random.choice(list(model.keys()))
+                s_next, r_next = model[(s_rand, a_rand)]
+
+                # Q update from model
+                Q[s_rand][a_rand] += ALPHA * (r_next + GAMMA * np.max(Q[s_next]) - Q[s_rand][a_rand]) 
+            #print(f"step{steps_count}")
+
+        steps_per_episode.append(steps_count)
+    return steps_per_episode
+
+def run_experiments():
+    """
+    Run multiple runs for each n_planning in [0, 5, 50]
+    and average results.
+    """
+    planning_values = [0, 5, 50]
+    avg_results = dict()
+
+    for n in planning_values:
+        all_runs = []
+        for _ in range(RUNS):
+            steps = dyna_q(n_planning=n)
+            all_runs.append(steps[1:])
+        # Average steps across runs
+        avg_steps = np.mean(all_runs, axis=0)
+        avg_results[n] = avg_steps
+
+    # Plot the results
+    plt.figure(figsize=(8,6))
+    for n in planning_values:
+        plt.plot(avg_results[n], label=f'n={n}')
+    plt.xlabel('Episode')
+    plt.ylabel('Steps per episode')
+    plt.title(f'Dyna-Q with n=0,5,50 (Averaged over {RUNS} runs)')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    return avg_results
+
+if __name__ == "__main__":
+    results = run_experiments()
+    print("Finished Dyna-Q experiments.")
